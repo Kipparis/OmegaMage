@@ -58,11 +58,43 @@ public class Mage : PT_MonoBehaviour {
     public float elementRotDist = 0.5f; // Радиус вращения
     public float elementRotSpeed = 0.5f;    // Период вращение
     public int maxNumSelectedElements = 1;
+    public Color[] elementColors;
+
+    // Задаёт минимальное и максимальное расстояние между двумя точками линии
+    public float lineMinDelta = 0.1f;
+    public float lineMaxDelta = 0.5f;
+    public float lineMaxLength = 8f;
+
+    public GameObject fireGroundSpellPrefab;
+
+    public float health = 4;    // Хп мага
+    public float damageTime = -100;
+    public float knockbackDist = 1; // Дистанция для отброса
+    public float knockbackDur = 0.5f;   // Секунд чтобы двигаться обратно
+    public float invincibleDur = 0.5f;  // Секунд чтобы быть неуязвимым
+    public int invTimesToBlink = 4; // кол-во мигания пока неуязвим
 
     public bool _____________________;
 
+    private bool invincibleBool = false;    // Маг неуязвим?
+    private bool knockbackBool = false; // Маг отброшен?
+    private Vector3 knockbackDir;   // Направление отброса
+    private Transform viewCharacterTrans;
+
+    protected Transform spellAnchor;    // Родитель для всех скиллов
+
+    public float totalLineLength;
+
+    public List<Vector3> linePts;   // Точки которые будет показывать линия
+    protected LineRenderer liner;   // Ссылка на компонент лайн рендерер
+    protected float lineZ = -0.1f;  // Z глубина линии
+    // ^ Щашишённые переменные может видеть только класс и наследуемые классы
+    // только публичные переменные появляются в инспекторе
+    // или те что помеченны [SerializeField] 
+
     public MPhase mPhase = MPhase.idle;
     public List<MouseInfo> mouseInfos = new List<MouseInfo>();
+    public string actionStartTag;   // ["Mage","Ground","Enemy"]
 
     public bool walking = false;
     public Vector3 walkTarget;
@@ -70,16 +102,21 @@ public class Mage : PT_MonoBehaviour {
 
     public List<Element> selectedElements = new List<Element>();
 
-    void Awake() {
+    private void Awake() {
         S = this;   // Задаём синглтон как грица
         mPhase = MPhase.idle;
 
         // Находим characterTrans, чтобы поворачивать с помощью Face()
         characterTrans = transform.Find("CharacterTrans");
+        viewCharacterTrans = characterTrans.Find("View_Character");
 
-        Vector3 tempPos = pos;
-        tempPos.z = 0;
-        pos = tempPos;
+        // Получаем компонент LineRenderer
+        liner = GetComponent<LineRenderer>();
+        liner.enabled = false;
+
+        GameObject saGO = new GameObject("SpellAnchor");
+        // ^ когда создаём новый ио, он становится в позицию 000 000 111
+        spellAnchor = saGO.transform;
     }
 
     void Update() {
@@ -181,30 +218,89 @@ public class Mage : PT_MonoBehaviour {
     void MouseDown() {
         // Если мышка была нажата на чём то, это может быть просто нажатие или перемещение
         if (DEBUG) print(gameObject.name + ":Mage.MouseDown()");
+
+        GameObject clickedGO = mouseInfos[0].hitInfo.collider.gameObject;
+        // ^ если мышка ничего не нажала это вызовет ошибку
+        // однако мы знаем что MouseDOwn() вызывается только когда кликаем на что-то
+
+        GameObject taggedParent = Utils.FindTaggedParent(clickedGO);
+        if (taggedParent == null) {
+            actionStartTag = "";
+        } else {
+            actionStartTag = taggedParent.tag;
+            // ^ Это либо земля, либо маг, либо враг
+        }
     }
 
     void MouseTap() {
         // Чтото было нажато как на кнопку
         if (DEBUG) print(gameObject.name + ":Mage.MouseTap()");
 
-        WalkTo(lastMouseInfo.loc);  // Идём к последней точке mouseInfo
-        ShowTap(lastMouseInfo.loc); // Показываем где игрок нажал
+        // На что было нажато
+        switch (actionStartTag) {
+            case "Mage":
+                // Ничего не делаем
+                break;
+            case "Ground":
+                WalkTo(lastMouseInfo.loc);  // Идём к последней точке mouseInfo
+                ShowTap(lastMouseInfo.loc); // Показываем где игрок нажал
+                break;
+        }
     }
 
     void MouseDrag() {
         // Мыш ( кродётся )
         if (DEBUG) print(gameObject.name + ":Mage.MouseDrag()");
 
-        // Продолжительно идём навстречу текущей mouseInfo позиции
-        WalkTo(mouseInfos[mouseInfos.Count - 1].loc);
+        // Перемещение бесполезно, до тех пор пока мышка не начинает на земле
+        if (actionStartTag != "Ground") return;
+        
+        // Еслин не было выбранно элементов, игрок просто следует мышке
+        if (selectedElements.Count == 0) {
+            // Продолжительно идём навстречу текущей mouseInfo позиции
+            WalkTo(mouseInfos[mouseInfos.Count - 1].loc);
+        } else {
+            // Это ground spell, так что нам надо нарисовать линию
+            AddPointToLiner(mouseInfos[mouseInfos.Count - 1].loc);
+            // ^ добавляем последнюю инфу о мышке к линии
+        }
     }
 
     void MouseDragUp() {
         // Мышка была отпущенна после перемещения
         if (DEBUG) print(gameObject.name + ":MageMouseDragUp()");
 
-        // Перестаём двигаться когда перетаскивание законченно
-        StopWalking();
+        // Перемещение бесполезно, до тех пор пока мы не на земле
+        if (actionStartTag != "Ground") return;
+
+        // Если нет выбранных элементов, перестаём двигаться
+        if(selectedElements.Count == 0) {
+            // Перестаём двигаться когда перетаскивание законченно
+            StopWalking();
+        } else {
+            CastGroundSpell();
+
+            // Обнуляем линию
+            ClearLiner();
+        }
+    }
+
+    void CastGroundSpell() {
+        // Если нет выбранного элемента, возвращаем
+        if (selectedElements.Count == 0) return;
+
+        switch (selectedElements[0].type) {
+            case ElementType.fire:
+                GameObject fireGO;
+                foreach (Vector3 pt in linePts) {
+                    // Создаём новый огонёк
+                    fireGO = Instantiate(fireGroundSpellPrefab) as GameObject;
+                    fireGO.transform.parent = spellAnchor;
+                    fireGO.transform.position = pt;
+                }
+                break;
+                //TODO: ДОбавить другие элементы
+        }
     }
 
     // Идём к определённой позиции. Координата z всегда 0
@@ -229,8 +325,29 @@ public class Mage : PT_MonoBehaviour {
     }
 
     void FixedUpdate() {    // Случается каждый шаг когда считается физика ( 50 /с-1 )
+        if (invincibleBool) {
+            // Достаём номер от 0 - 1
+            float blinkU = (Time.time - damageTime) / invincibleDur;
+            blinkU *= invTimesToBlink;  //  Умножаем на количество миганий
+            blinkU %= 1f;   // Даёт числа после запятой
+            bool visible = (blinkU > 0.5f);
+            if (Time.time - damageTime > invincibleDur) {
+                invincibleBool = false;
+                visible = true; // На всякий пожарный
+            }
+            // Делание ио неактивным делает его невидимым
+            viewCharacterTrans.gameObject.SetActive(visible);
+        }
+        if (knockbackBool) {
+            if (Time.time - damageTime > knockbackDur) {
+                knockbackBool = false;
+            }
+            float knockbackSpeed = knockbackDist / knockbackDur;
+            vel = knockbackDir * knockbackSpeed;
+            return; // Возвращаем чтобы избежать кода для бега ниже
+        }
         if (walking) { // Если маг гуляет
-            if ((walkTarget-pos).magnitude < Time.fixedDeltaTime * speed) {
+            if ((walkTarget - pos).magnitude < Time.fixedDeltaTime * speed) {
                 // Если маг очень близок к цели, просто останавливаемся
                 pos = walkTarget;
                 StopWalking();
@@ -255,6 +372,48 @@ public class Mage : PT_MonoBehaviour {
                 StopWalking();
             }
         }
+
+        // Чекаем врага
+        EnemyBug bug = collision.gameObject.GetComponent<EnemyBug>();
+        // Если рил павук, зовём помощь
+        // Если это паук, передаём его, чтобы он обрабатывался как враг
+        if (bug != null) CollisionDamage(bug);
+        //if (bug != null) CollisionDamage(otherGO);
+    }
+
+    private void OnTriggerEnter(Collider other) {
+        EnemySpiker spiker = other.GetComponent<EnemySpiker>();
+        if (spiker != null) {
+            // CollisionDamage() будет видеть спираль как врага
+            CollisionDamage(spiker);
+            //CollisionDamage(other.gameObject);
+        }
+    }
+
+    void CollisionDamage(Enemy enemy) {
+
+        // Не получаем урон если неуязвимы
+        if (invincibleBool) return;
+
+        // Маг был ударен врагом
+        StopWalking();
+        ClearInput();
+
+        health -= enemy.touchDamage;    // Убираем хпшечку, в зависимости от определённого
+        if (health <= 0) {
+            Die();
+            return;
+        }
+
+        damageTime = Time.time;
+        knockbackBool = true;
+        knockbackDir = (pos - enemy.pos).normalized;
+        invincibleBool = true;
+    }
+
+    // Маг умирает T_T
+    void Die() {
+        Application.LoadLevel(0);
     }
 
     // Показываем где игрок нажал
@@ -322,5 +481,79 @@ public class Mage : PT_MonoBehaviour {
             vec.z = -0.5f;
             el.lPos = vec;  // Задаём позицию Element_Sphere
         }
+    }
+
+    //----------------LineRenderer Code --------------//
+
+    // Добавляем новую точку к линии. Игнорирует точку если она слишком близко,
+    // добавляет новую, если слишком далеко
+    void AddPointToLiner(Vector3 pt) {
+        pt.z = lineZ;   // Задаём Z позицию чтоб линия была немного выше земли
+        //linePts.Add(pt);
+        //UpdateLiner();
+
+        // Всегда добавляем точку, если linePts пуст
+        if (linePts.Count == 0) {
+            linePts.Add(pt);
+            totalLineLength = 0;
+            return;
+        }
+
+        // Если линия уже слишком длинная, возвращаем
+        if (totalLineLength > lineMaxLength) return;
+
+        // Если есть предыдущая точка ( pt0 ), узнаём как она далеко
+        Vector3 pt0 = linePts[linePts.Count - 1];   // Находим последнюю точку
+        Vector3 dir = pt - pt0;
+        float delta = dir.magnitude;
+        dir.Normalize();
+
+        // Если она меньше чем минимальная дистанция
+        if (delta < lineMinDelta) {
+            // Слишком близко, так что не добавляем
+            return;
+        }
+
+        // Если дальше чем максимальная дистанция, добавляем точку
+        if (delta > lineMaxDelta) {
+            // Посередине мужду ними
+            float numToAdd = Mathf.Ceil(delta / lineMaxDelta);
+            float midDelta = delta / numToAdd;
+            Vector3 ptMid;
+            for (int i = 1; i < numToAdd; i++) {
+                ptMid = pt0 + (dir * midDelta * i);
+                linePts.Add(ptMid);
+            }
+        }
+
+        totalLineLength += delta;
+        linePts.Add(pt);    // Добавляем точку
+        UpdateLiner();  // Наконец обновляем линию
+    }
+
+    // Обновляем лайн рендерер со всеми новыми точками
+    public void UpdateLiner() {
+        // Получаем тип выбранного элемента
+        int el = (int)selectedElements[0].type;
+
+        // Задаём цвет линии
+        liner.endColor = liner.startColor = elementColors[el];
+
+        // Обновляем репрезентацию о наземном скилле
+        liner.SetVertexCount(linePts.Count);    // задаём кол-во вершин
+        for (int i = 0; i < linePts.Count; i++) {
+            liner.SetPosition(i, linePts[i]);   // Задаём каждую вершину
+        }
+        liner.enabled = true;
+    }
+
+    public void ClearLiner() {
+        liner.enabled = false;  // Выключаем лайн рендерер
+        linePts.Clear();    // очищаем linePts список
+    }
+
+    // Прекращаем любое активное нажатие
+    public void ClearInput() {
+        mPhase = MPhase.idle;
     }
 }

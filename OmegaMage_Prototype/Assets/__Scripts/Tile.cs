@@ -52,7 +52,7 @@ public class Tile : PT_MonoBehaviour {
 // Методы
     public void AdjustHeight() {
         // Двигаем блок вверх или вниз в зависимости от _height
-        Vector3 vertOffset = Vector3.back * (_height - 0.6f);
+        Vector3 vertOffset = Vector3.back * (_height - .6f);
         // Сдвиг на -0.5f делает так, что при высоте 0, верхняя плоскость кубов будет на z высоте 0
         transform.position = _pos + vertOffset;
     }

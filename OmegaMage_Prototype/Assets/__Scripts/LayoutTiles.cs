@@ -9,6 +9,13 @@ public class TileTex {
     public Texture2D tex;
 }
 
+[System.Serializable]
+public class EnemyDef {
+    // Позволяет определить несколько врагов
+    public string str;
+    public GameObject go;
+}
+
 public class LayoutTiles : MonoBehaviour {
     static public LayoutTiles S;
 
@@ -18,7 +25,12 @@ public class LayoutTiles : MonoBehaviour {
     public GameObject tilePrefab;   // Префаб для всех плит
     public TileTex[] tileTextures;  // Список именнованных текстур для плиток
 
+    public GameObject portalPrefab; // Префаб портала между комнатами
+    public EnemyDef[] enemyDefinitions; // Префабы для врагов
+
     public bool _____________________;
+
+    private bool firstRoom = true;  // Это первая комната?
 
     public PT_XMLReader roomsXMLR;
     public PT_XMLHashList roomsXML;
@@ -37,7 +49,9 @@ public class LayoutTiles : MonoBehaviour {
         roomsXMLR = new PT_XMLReader(); // Создаём считыватель
         roomsXMLR.Parse(roomsText.text);    // Передаём Rooms.xml
         roomsXML = roomsXMLR.xml["xml"][0]["room"]; // Достаём все комнаты
+    }
 
+    void Start() {
         // Создаём нулевую ( первую ) комнату
         BuildRoom(roomNumber);
     }
@@ -54,6 +68,8 @@ public class LayoutTiles : MonoBehaviour {
         return (null);
     }
 
+    // Строим комнату основанную на room number. Альтернативная версия BuildRoom
+    // которая выбирает roomXML основываясь на room num
     public void BuildRoom(string str) {
         PT_XMLHashtable roomHT = null;
         for (int i = 0; i < roomsXML.Count; i++) {
@@ -69,6 +85,16 @@ public class LayoutTiles : MonoBehaviour {
     }
 
     public void BuildRoom(PT_XMLHashtable room) {
+        // Разрушаем старые плитки
+        foreach (Transform t in tileAnchor) {
+            Destroy(t.gameObject);
+        }
+
+        // Двигаем мага подальше
+        Mage.S.pos = Vector3.left * 1000;   // Чтобы случайно не затригерил ничего
+        Mage.S.ClearInput();    // Очищаем любые фигнюшки на маге
+
+        string rNumStr = room.att("num");
         // Выбираем текстуры для поля и для стен
         string floorTexStr = room.att("floor");
         string wallTexStr = room.att("wall");
@@ -89,6 +115,7 @@ public class LayoutTiles : MonoBehaviour {
         GameObject go;
         int height;
         float maxY = roomRows.Length - 1;
+        List<Portal> portals = new List<Portal>();
 
         // Этот цикл сканирует в каждой строчке каждую плитку
         for (int y = 0; y < roomRows.Length; y++) {
@@ -142,12 +169,87 @@ public class LayoutTiles : MonoBehaviour {
                 // Проверяем специфичные создания в комнате
                 switch (rawType) {
                     case "X":   // Стартовая позиция для мага
-                        Mage.S.pos = ti.pos;
+                        //Mage.S.pos = ti.pos;
+                        if (firstRoom) {
+                            Mage.S.pos = ti.pos;    // Используем синглтон мага
+                            roomNumber = rNumStr;
+                            firstRoom = false;
+                        }
+                        break;
+                    case "0":   // Номера это порталы в комнату
+                    case "1":   // Позволяет распологать порталыв Rooms.xml
+                    case "2":
+                    case "3":
+                    case "4":
+                    case "5":
+                    case "6":
+                    case "7":
+                    case "8":
+                    case "9":
+                    case "A":
+                    case "B":
+                    case "C":
+                    case "D":
+                    case "E":
+                    case "F":
+                        // Создаём портал
+                        GameObject pGO = Instantiate(portalPrefab) as GameObject;
+                        // Когда комната сменится, портал тоже удалится
+                        pGO.transform.parent = tileAnchor;
+                        Portal p = pGO.GetComponent<Portal>();
+                        p.pos = ti.pos;
+                        p.toRoom = rawType;
+                        pGO.GetComponent<Collider>().isTrigger = false;
+                        pGO.GetComponent<Collider>().isTrigger = true;
+                        portals.Add(p);
+                        break;
+                    default:
+                        // Ищем есть ли враг для этой буквы
+                        Enemy en = EnemyFactory(rawType);
+                        if (en == null) break;  // Если нет подходящего, возвращаем
+                        // Устанавливаем врага
+                        en.pos = ti.pos;
+                        // Делаем врага дитём tileAnchor так он удалится на след.комнате
+                        en.transform.parent = tileAnchor;
+                        en.typeString = rawType;
                         break;
                 }
 
                 // Дальше лучше :)
             }
         }
+
+        // Располагаем мага
+        foreach (Portal p in portals) {
+            if (p.toRoom == roomNumber || firstRoom) {
+                Mage.S.StopWalking();   // Прекращаем любое движение мага
+                Mage.S.pos = p.pos;
+                p.justArrived = true;
+                firstRoom = false;
+            }
+        }
+
+        roomNumber = rNumStr;
+    }
+
+    public Enemy EnemyFactory(string typeStr) {
+        GameObject prefab = null;
+        foreach (EnemyDef ed in enemyDefinitions) {
+            if (ed.str == typeStr) {
+                prefab = ed.go;
+                break;
+            }
+        }
+        if (prefab == null) {
+            Utils.tr("LayoutTiles.EnemyFactory()", "No EnemyDef for: " + typeStr);
+            return (null);
+        }
+
+        GameObject go = Instantiate(prefab) as GameObject;
+        // Обычная форма GetComponent<>() не работает с интерфейсами, 
+        // Так что делаем по другому
+        Enemy en = (Enemy)go.GetComponent(typeof(Enemy));
+
+        return (en);
     }
 }

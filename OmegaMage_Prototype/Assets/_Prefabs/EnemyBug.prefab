@@ -214,6 +214,7 @@ GameObject:
   - component: {fileID: 400024}
   - component: {fileID: 13600000}
   - component: {fileID: 5400000}
+  - component: {fileID: 114127510639117158}
   m_Layer: 0
   m_Name: EnemyBug
   m_TagString: Enemy
@@ -1620,3 +1621,19 @@ Prefab:
   m_ParentPrefab: {fileID: 0}
   m_RootGameObject: {fileID: 100024}
   m_IsPrefabParent: 1
+--- !u!114 &114127510639117158
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 100024}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 70a4472740c3efd4598c8b84b6e114a7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  speed: 0.5
+  _______________: 0
+  walkTarget: {x: 0, y: 0, z: 0}
+  walking: 0
+  characterTrans: {fileID: 0}
